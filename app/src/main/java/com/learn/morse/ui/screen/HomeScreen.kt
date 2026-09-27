@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.School
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -26,7 +27,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 @Composable
-fun HomeScreen(onLearnClick: () -> Unit, onSettingsClick: () -> Unit) {
+fun HomeScreen(onLearnClick: () -> Unit, onTranslatorClick: () -> Unit, onSettingsClick: () -> Unit) {
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -66,6 +67,17 @@ fun HomeScreen(onLearnClick: () -> Unit, onSettingsClick: () -> Unit) {
             modifier = Modifier
                 .fillMaxWidth()
                 .height(56.dp),
+            onClick = onTranslatorClick,
+        ) {
+            Icon(Icons.Filled.SwapHoriz, contentDescription = null, modifier = Modifier.size(20.dp))
+            Spacer(Modifier.width(8.dp))
+            Text("Morse ⇄ Text", style = MaterialTheme.typography.titleMedium)
+        }
+        Spacer(Modifier.height(12.dp))
+        OutlinedButton(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(56.dp),
             onClick = onSettingsClick,
         ) {
             Icon(Icons.Filled.Settings, contentDescription = null, modifier = Modifier.size(20.dp))
@@ -78,5 +90,5 @@ fun HomeScreen(onLearnClick: () -> Unit, onSettingsClick: () -> Unit) {
 @Preview(showBackground = true)
 @Composable
 private fun HomeScreenPreview() {
-    HomeScreen(onLearnClick = {}, onSettingsClick = {})
+    HomeScreen(onLearnClick = {}, onTranslatorClick = {}, onSettingsClick = {})
 }

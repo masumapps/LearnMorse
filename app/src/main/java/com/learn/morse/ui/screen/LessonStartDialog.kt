@@ -16,6 +16,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -79,25 +82,49 @@ fun LessonStartDialog(
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Header(lesson)
 
+                // Only the letters scroll, so a long alphabet never pushes the Start button off screen.
+                val letters = lesson.options
+                val compact = letters.size > COMPACT_AFTER
                 Column(
-                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 20.dp),
+                    modifier = Modifier
+                        .weight(1f, fill = false)
+                        .verticalScroll(rememberScrollState())
+                        .padding(start = 24.dp, end = 24.dp, top = 20.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
+                    val noun = when (lesson.kind) {
+                        LessonKind.Symbols -> "letter"
+                        LessonKind.Words -> "word"
+                        LessonKind.Signals -> "signal"
+                    }
                     Text(
-                        text = "Tap a letter to hear it",
+                        text = if (compact) "${letters.size} ${noun}s · tap one to hear it" else "Tap a $noun to hear it",
                         style = MaterialTheme.typography.labelLarge,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     Spacer(Modifier.height(12.dp))
-                    FlowRow(
-                        horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterHorizontally),
-                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                    if (lesson.kind == LessonKind.Signals) {
+                        // Signals are learned by meaning, so they're listed with it rather than as cards.
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            letters.forEach { name ->
+                                signalOf(name)?.let { SignalRow(it, onClick = { onPlayLetter(name) }) }
+                            }
+                        }
+                    } else FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(if (compact) 6.dp else 10.dp, Alignment.CenterHorizontally),
+                        verticalArrangement = Arrangement.spacedBy(if (compact) 6.dp else 10.dp),
                     ) {
-                        lesson.options.split(",").forEach { letter ->
-                            LetterCard(letter, onClick = { onPlayLetter(letter) })
+                        letters.forEach { letter ->
+                            if (compact) CompactLetterCard(letter, onClick = { onPlayLetter(letter) })
+                            else LetterCard(letter, onClick = { onPlayLetter(letter) })
                         }
                     }
+                }
 
+                Column(
+                    modifier = Modifier.padding(start = 24.dp, end = 24.dp, bottom = 20.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
                     Spacer(Modifier.height(20.dp))
                     if (resumeStep > 0) {
                         LinearProgressIndicator(
@@ -159,7 +186,7 @@ private fun Header(lesson: LessonModel) {
             contentAlignment = Alignment.Center,
         ) {
             Text(
-                text = lesson.id.toString(),
+                text = lessonNumber(lesson).toString(),
                 style = MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.Bold,
                 color = colors.onPrimary,
@@ -167,7 +194,7 @@ private fun Header(lesson: LessonModel) {
         }
         Spacer(Modifier.height(12.dp))
         Text(
-            text = "LESSON ${lesson.id}",
+            text = "${courseOf(lesson.id).name.uppercase()} · LESSON ${lessonNumber(lesson)}",
             style = MaterialTheme.typography.labelLarge,
             color = colors.onPrimary.copy(alpha = 0.8f),
         )
@@ -184,11 +211,12 @@ private fun Header(lesson: LessonModel) {
 private fun LetterCard(letter: String, onClick: () -> Unit) {
     Column(
         modifier = Modifier
-            .width(72.dp)
+            // Grows past 72dp for long codes like J (.---) instead of clipping them.
+            .widthIn(min = 72.dp)
             .clip(RoundedCornerShape(16.dp))
             .background(MaterialTheme.colorScheme.primaryContainer)
             .clickable(onClick = onClick)
-            .padding(vertical = 12.dp),
+            .padding(horizontal = 10.dp, vertical = 12.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Text(
@@ -198,7 +226,7 @@ private fun LetterCard(letter: String, onClick: () -> Unit) {
             color = MaterialTheme.colorScheme.onPrimaryContainer,
         )
         Spacer(Modifier.height(6.dp))
-        MorseSymbols(morseMap[letter].orEmpty())
+        MorseSymbols(codeOf(letter), modifier = Modifier.height(8.dp))
         Spacer(Modifier.height(8.dp))
         Icon(
             Icons.AutoMirrored.Filled.VolumeUp,
@@ -209,22 +237,94 @@ private fun LetterCard(letter: String, onClick: () -> Unit) {
     }
 }
 
-/** Draws morse as shapes: round dots and pill-shaped dashes. */
+/** A signal with its code, meaning and note; tapping plays it. */
 @Composable
-private fun MorseSymbols(morse: String) {
+private fun SignalRow(signal: Signal, onClick: () -> Unit) {
     Row(
-        modifier = Modifier.height(8.dp),
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(MaterialTheme.colorScheme.primaryContainer)
+            .clickable(onClickLabel = "Play ${signal.name}", onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        morse.forEach { symbol ->
-            Box(
-                modifier = Modifier
-                    .size(width = if (symbol == '-') 20.dp else 8.dp, height = 8.dp)
-                    .background(MaterialTheme.colorScheme.primary, CircleShape)
+        Column(modifier = Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = signal.name,
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                )
+                Spacer(Modifier.width(10.dp))
+                MorseSymbols(signal.morse, dotSize = 5.dp)
+            }
+            Text(
+                text = signal.meaning,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onPrimaryContainer,
             )
+            val detail = listOfNotNull(if (signal.isProsign) "Prosign: sent as one, no gaps" else null, signal.note)
+            if (detail.isNotEmpty()) {
+                Text(
+                    text = detail.joinToString(" · "),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.75f),
+                )
+            }
         }
+        Icon(
+            Icons.AutoMirrored.Filled.VolumeUp,
+            contentDescription = null,
+            modifier = Modifier.size(18.dp),
+            tint = MaterialTheme.colorScheme.primary,
+        )
     }
+}
+
+/**
+ * Smaller card for lessons with many letters: 5 fit per row in a phone-width dialog (~280dp of content),
+ * so the whole alphabet takes 6 rows. 4dp dots keep the longest codes (.---, --.-) inside 48dp.
+ */
+@Composable
+private fun CompactLetterCard(letter: String, onClick: () -> Unit) {
+    Column(
+        modifier = Modifier
+            // Grows for words, whose two codes don't fit in 48dp.
+            .widthIn(min = 48.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.primaryContainer)
+            .clickable(onClickLabel = "Play $letter", onClick = onClick)
+            .padding(vertical = 8.dp, horizontal = if (letter.length > 1) 6.dp else 0.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(
+            text = letter,
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onPrimaryContainer,
+        )
+        Spacer(Modifier.height(4.dp))
+        MorseSymbols(codeOf(letter), modifier = Modifier.height(4.dp), dotSize = 4.dp)
+    }
+}
+
+// Lessons with more letters than this use compact cards.
+private const val COMPACT_AFTER = 8
+
+@Preview
+@Composable
+private fun LessonStartDialogAlphabetPreview() {
+    LessonStartDialog(
+        lesson = lessons.first().copy(name = "Review", options = ('A'..'Z').map { it.toString() }, chapter = 60),
+        stepCount = 60,
+        resumeStep = 0,
+        onPlayLetter = {},
+        onStart = {},
+        onDismiss = {},
+    )
 }
 
 @Preview

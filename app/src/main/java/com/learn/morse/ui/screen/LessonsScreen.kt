@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -47,24 +48,29 @@ import androidx.compose.ui.unit.dp
 import com.learn.morse.progress.LessonProgress
 
 @Composable
-fun LessonsScreen(onLessonClick: (id: Long, resume: Boolean) -> Unit, onBack: () -> Unit) {
+fun LessonsScreen(courseId: Int, onLessonClick: (id: Long, resume: Boolean) -> Unit, onBack: () -> Unit) {
     val context = LocalContext.current
+    val course = remember(courseId) { courses.first { it.id == courseId } }
     // Re-read on every visit: the screen leaves composition while a lesson is open.
-    val completedCount = remember { LessonProgress.completedCount(context) }
+    val completedCount = remember { LessonProgress.completedIn(context, course) }
     val currentStep = remember {
-        lessons.getOrNull(completedCount)?.let { LessonProgress.savedStep(context, it.id) } ?: 0
+        course.lessons.getOrNull(completedCount)?.let { LessonProgress.savedStep(context, it.id) } ?: 0
     }
-    LessonsContent(completedCount, currentStep, onLessonClick, onBack)
+    val stars = remember { course.lessons.associate { it.id to LessonProgress.stars(context, it.id) } }
+    LessonsContent(course, completedCount, currentStep, stars, onLessonClick, onBack)
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun LessonsContent(
+    course: Course,
     completedCount: Int,
     currentStep: Int,
+    stars: Map<Long, Int>,
     onLessonClick: (id: Long, resume: Boolean) -> Unit,
     onBack: () -> Unit,
 ) {
+    val lessons = course.lessons
     val completed = lessons.take(completedCount)
     val current = lessons.getOrNull(completedCount)
     val locked = lessons.drop(completedCount + 1)
@@ -72,7 +78,7 @@ private fun LessonsContent(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Learn") },
+                title = { Text(course.name) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
@@ -90,12 +96,13 @@ private fun LessonsContent(
                 if (current != null) {
                     CurrentLessonCard(
                         lesson = current,
+                        lessonCount = lessons.size,
                         completedCount = completedCount,
                         currentStep = currentStep,
                         onClick = { onLessonClick(current.id, true) },
                     )
                 } else {
-                    AllCompleteCard(onReview = { onLessonClick(lessons.first().id, false) })
+                    AllCompleteCard(courseName = course.name, onReview = { onLessonClick(lessons.first().id, false) })
                 }
             }
 
@@ -107,6 +114,7 @@ private fun LessonsContent(
                         icon = Icons.Filled.CheckCircle,
                         iconTint = MaterialTheme.colorScheme.primary,
                         trailing = Icons.Filled.Replay,
+                        stars = stars[lesson.id] ?: 0,
                         onClick = { onLessonClick(lesson.id, false) },
                     )
                 }
@@ -128,7 +136,7 @@ private fun LessonsContent(
 }
 
 @Composable
-private fun CurrentLessonCard(lesson: LessonModel, completedCount: Int, currentStep: Int, onClick: () -> Unit) {
+private fun CurrentLessonCard(lesson: LessonModel, lessonCount: Int, completedCount: Int, currentStep: Int, onClick: () -> Unit) {
     val stepCount = remember(lesson.id) { learnsFor(lesson.id).size }
     val isStarted = completedCount > 0 || currentStep > 0
     Card(
@@ -141,7 +149,7 @@ private fun CurrentLessonCard(lesson: LessonModel, completedCount: Int, currentS
     ) {
         Column(modifier = Modifier.padding(20.dp)) {
             Text(
-                text = if (isStarted) "Up next · Lesson ${lesson.id}" else "Lesson ${lesson.id}",
+                text = if (isStarted) "Up next · Lesson ${lessonNumber(lesson)}" else "Lesson ${lessonNumber(lesson)}",
                 style = MaterialTheme.typography.labelLarge,
             )
             Spacer(Modifier.height(4.dp))
@@ -163,7 +171,7 @@ private fun CurrentLessonCard(lesson: LessonModel, completedCount: Int, currentS
                 style = MaterialTheme.typography.bodySmall,
             )
             Text(
-                text = "$completedCount of ${lessons.size} lessons completed",
+                text = "$completedCount of $lessonCount lessons completed",
                 style = MaterialTheme.typography.bodySmall,
             )
             Spacer(Modifier.height(16.dp))
@@ -185,7 +193,7 @@ private fun CurrentLessonCard(lesson: LessonModel, completedCount: Int, currentS
 }
 
 @Composable
-private fun AllCompleteCard(onReview: () -> Unit) {
+private fun AllCompleteCard(courseName: String, onReview: () -> Unit) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(20.dp),
@@ -203,7 +211,7 @@ private fun AllCompleteCard(onReview: () -> Unit) {
             Icon(Icons.Filled.EmojiEvents, contentDescription = null, modifier = Modifier.size(48.dp))
             Spacer(Modifier.height(8.dp))
             Text(
-                text = "All lessons completed",
+                text = "$courseName completed",
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.Bold,
             )
@@ -224,8 +232,27 @@ private fun AllCompleteCard(onReview: () -> Unit) {
 /** The lesson's letters with their morse, e.g. "E ." and "T -". */
 @Composable
 private fun LetterChips(lesson: LessonModel) {
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        lesson.options.split(",").forEach { letter ->
+    // Wraps onto more lines for review lessons instead of squeezing the last chips.
+    FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        val letters = lesson.options
+        // Big reviews show letters only, in small squares, so even A-Z stays about four lines tall.
+        if (letters.size > 8) {
+            letters.forEach { letter ->
+                Box(
+                    modifier = Modifier
+                        .size(34.dp)
+                        .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(8.dp)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(letter, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                }
+            }
+            return@FlowRow
+        }
+        letters.forEach { letter ->
             Row(
                 modifier = Modifier
                     .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(10.dp))
@@ -233,12 +260,8 @@ private fun LetterChips(lesson: LessonModel) {
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(letter, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                Spacer(Modifier.width(6.dp))
-                Text(
-                    text = morseMap[letter].orEmpty(),
-                    style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.primary,
-                )
+                Spacer(Modifier.width(8.dp))
+                MorseSymbols(codeOf(letter), dotSize = 6.dp)
             }
         }
     }
@@ -261,6 +284,7 @@ private fun LessonRow(
     iconTint: androidx.compose.ui.graphics.Color,
     modifier: Modifier = Modifier,
     trailing: ImageVector? = null,
+    stars: Int = 0,
     onClick: (() -> Unit)? = null,
 ) {
     val content: @Composable () -> Unit = {
@@ -281,11 +305,13 @@ private fun LessonRow(
             Spacer(Modifier.width(16.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = "Lesson ${lesson.id}",
+                    text = "Lesson ${lessonNumber(lesson)}",
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Text(text = lesson.name, style = MaterialTheme.typography.titleMedium)
+                // Lessons finished before stars existed have none recorded, so show nothing rather than zero.
+                if (stars > 0) StarRating(stars, modifier = Modifier.padding(top = 4.dp), size = 16.dp)
             }
             if (trailing != null) {
                 Icon(trailing, contentDescription = "Replay", tint = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -304,5 +330,5 @@ private fun LessonRow(
 @Preview(showBackground = true)
 @Composable
 private fun LessonsScreenPreview() {
-    LessonsContent(completedCount = 1, currentStep = 5, onLessonClick = { _, _ -> }, onBack = {})
+    LessonsContent(course = courses.first(), completedCount = 2, currentStep = 5, stars = mapOf(1L to 3, 2L to 2), onLessonClick = { _, _ -> }, onBack = {})
 }
