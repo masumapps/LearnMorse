@@ -38,13 +38,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.res.pluralStringResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import com.learn.morse.R
 
 /**
  * Shown when a lesson opens: introduces its letters (tap one to hear it) and waits for the user to start.
@@ -92,13 +94,13 @@ fun LessonStartDialog(
                         .padding(start = 24.dp, end = 24.dp, top = 20.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
-                    val noun = when (lesson.kind) {
-                        LessonKind.Symbols -> "letter"
-                        LessonKind.Words -> "word"
-                        LessonKind.Signals -> "signal"
+                    val (countText, tapText) = when (lesson.kind) {
+                        LessonKind.Symbols -> R.plurals.start_count_letters to R.string.start_tap_letter
+                        LessonKind.Words -> R.plurals.start_count_words to R.string.start_tap_word
+                        LessonKind.Signals -> R.plurals.start_count_signals to R.string.start_tap_signal
                     }
                     Text(
-                        text = if (compact) "${letters.size} ${noun}s · tap one to hear it" else "Tap a $noun to hear it",
+                        text = if (compact) pluralStringResource(countText, letters.size, letters.size) else stringResource(tapText),
                         style = MaterialTheme.typography.labelLarge,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -136,13 +138,13 @@ fun LessonStartDialog(
                         )
                         Spacer(Modifier.height(6.dp))
                         Text(
-                            text = "You're on step ${resumeStep + 1} of $stepCount",
+                            text = stringResource(R.string.start_resume_step, resumeStep + 1, stepCount),
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     } else {
                         Text(
-                            text = "$stepCount steps · listen, then tap",
+                            text = pluralStringResource(R.plurals.steps_listen_tap, stepCount, stepCount),
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -158,11 +160,11 @@ fun LessonStartDialog(
                         Icon(Icons.Filled.PlayArrow, contentDescription = null)
                         Spacer(Modifier.width(8.dp))
                         Text(
-                            text = if (resumeStep > 0) "Continue lesson" else "Start lesson",
+                            text = stringResource(if (resumeStep > 0) R.string.start_continue else R.string.start_start),
                             style = MaterialTheme.typography.titleMedium,
                         )
                     }
-                    TextButton(onClick = onDismiss) { Text("Not now") }
+                    TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_not_now)) }
                 }
             }
         }
@@ -182,11 +184,12 @@ private fun Header(lesson: LessonModel) {
         Box(
             modifier = Modifier
                 .size(56.dp)
-                .background(Color.White.copy(alpha = 0.2f), CircleShape),
+                .background(colors.onPrimary.copy(alpha = 0.2f), CircleShape),
             contentAlignment = Alignment.Center,
         ) {
             Text(
-                text = lessonNumber(lesson).toString(),
+                // Practice isn't numbered: it belongs to no course.
+                text = if (lesson.isPractice) "🎯" else lessonNumber(lesson).toString(),
                 style = MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.Bold,
                 color = colors.onPrimary,
@@ -194,12 +197,13 @@ private fun Header(lesson: LessonModel) {
         }
         Spacer(Modifier.height(12.dp))
         Text(
-            text = "${courseOf(lesson.id).name.uppercase()} · LESSON ${lessonNumber(lesson)}",
+            text = if (lesson.isPractice) stringResource(R.string.start_practice_header)
+            else stringResource(R.string.start_lesson_header, stringResource(courseOf(lesson.id).name).uppercase(), lessonNumber(lesson)),
             style = MaterialTheme.typography.labelLarge,
             color = colors.onPrimary.copy(alpha = 0.8f),
         )
         Text(
-            text = lesson.name,
+            text = lesson.displayName(),
             style = MaterialTheme.typography.titleLarge,
             fontWeight = FontWeight.Bold,
             color = colors.onPrimary,
@@ -226,11 +230,13 @@ private fun LetterCard(letter: String, onClick: () -> Unit) {
             color = MaterialTheme.colorScheme.onPrimaryContainer,
         )
         Spacer(Modifier.height(6.dp))
-        MorseSymbols(codeOf(letter), modifier = Modifier.height(8.dp))
+        val code = codeOf(letter)
+        // A phrase's code would stretch the card past the dialog; the play button covers it.
+        if (code.length <= MAX_PREVIEW_MORSE) MorseSymbols(code, modifier = Modifier.height(8.dp))
         Spacer(Modifier.height(8.dp))
         Icon(
             Icons.AutoMirrored.Filled.VolumeUp,
-            contentDescription = "Play $letter",
+            contentDescription = stringResource(R.string.play_item, letter),
             modifier = Modifier.size(16.dp),
             tint = MaterialTheme.colorScheme.primary,
         )
@@ -245,7 +251,7 @@ private fun SignalRow(signal: Signal, onClick: () -> Unit) {
             .fillMaxWidth()
             .clip(RoundedCornerShape(16.dp))
             .background(MaterialTheme.colorScheme.primaryContainer)
-            .clickable(onClickLabel = "Play ${signal.name}", onClick = onClick)
+            .clickable(onClickLabel = stringResource(R.string.play_item, signal.name), onClick = onClick)
             .padding(horizontal = 14.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -261,12 +267,12 @@ private fun SignalRow(signal: Signal, onClick: () -> Unit) {
                 MorseSymbols(signal.morse, dotSize = 5.dp)
             }
             Text(
-                text = signal.meaning,
+                text = stringResource(signal.meaning),
                 style = MaterialTheme.typography.bodyMedium,
                 fontWeight = FontWeight.SemiBold,
                 color = MaterialTheme.colorScheme.onPrimaryContainer,
             )
-            val detail = listOfNotNull(if (signal.isProsign) "Prosign: sent as one, no gaps" else null, signal.note)
+            val detail = listOfNotNull(if (signal.isProsign) stringResource(R.string.start_prosign) else null, signal.noteText())
             if (detail.isNotEmpty()) {
                 Text(
                     text = detail.joinToString(" · "),
@@ -296,7 +302,7 @@ private fun CompactLetterCard(letter: String, onClick: () -> Unit) {
             .widthIn(min = 48.dp)
             .clip(RoundedCornerShape(12.dp))
             .background(MaterialTheme.colorScheme.primaryContainer)
-            .clickable(onClickLabel = "Play $letter", onClick = onClick)
+            .clickable(onClickLabel = stringResource(R.string.play_item, letter), onClick = onClick)
             .padding(vertical = 8.dp, horizontal = if (letter.length > 1) 6.dp else 0.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
@@ -307,18 +313,22 @@ private fun CompactLetterCard(letter: String, onClick: () -> Unit) {
             color = MaterialTheme.colorScheme.onPrimaryContainer,
         )
         Spacer(Modifier.height(4.dp))
-        MorseSymbols(codeOf(letter), modifier = Modifier.height(4.dp), dotSize = 4.dp)
+        val code = codeOf(letter)
+        if (code.length <= MAX_PREVIEW_MORSE) MorseSymbols(code, modifier = Modifier.height(4.dp), dotSize = 4.dp)
     }
 }
 
 // Lessons with more letters than this use compact cards.
 private const val COMPACT_AFTER = 8
 
+// Longest code the letter cards show; five-letter words fit, phrases don't.
+private const val MAX_PREVIEW_MORSE = 26
+
 @Preview
 @Composable
 private fun LessonStartDialogAlphabetPreview() {
     LessonStartDialog(
-        lesson = lessons.first().copy(name = "Review", options = ('A'..'Z').map { it.toString() }, chapter = 60),
+        lesson = lessons.first().copy(title = LessonTitle.Review(1), options = ('A'..'Z').map { it.toString() }, chapter = 60),
         stepCount = 60,
         resumeStep = 0,
         onPlayLetter = {},

@@ -2,12 +2,18 @@ package com.learn.morse.ui.screen
 
 import android.content.Context
 import android.os.SystemClock
+import androidx.annotation.StringRes
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.LinearOutSlowInEasing
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -29,6 +35,7 @@ import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Cancel
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.Hearing
 import androidx.compose.material.icons.filled.Lightbulb
 import androidx.compose.material.icons.filled.Psychology
@@ -58,69 +65,145 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.RoundRect
+import androidx.compose.ui.geometry.toRect
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathOperation
+import androidx.compose.ui.graphics.compositeOver
+import androidx.compose.ui.graphics.drawscope.clipPath
+import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.PointerId
 import androidx.compose.ui.input.pointer.changedToDownIgnoreConsumed
 import androidx.compose.ui.input.pointer.changedToUpIgnoreConsumed
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.learn.morse.R
+import com.learn.morse.analytics.Analytics
 import com.learn.morse.audio.FeedbackSounds
+import com.learn.morse.audio.Haptics
 import com.learn.morse.audio.KeyTone
 import com.learn.morse.audio.MorsePlayer
 import com.learn.morse.audio.SoundSettings
+import com.learn.morse.monetization.AppOpenAds
 import com.learn.morse.progress.LessonProgress
+import com.learn.morse.progress.Streak
+import com.learn.morse.progress.SymbolStats
+import kotlin.math.hypot
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import androidx.core.content.edit
+import kotlin.random.Random
 import kotlin.time.Duration.Companion.milliseconds
+import com.learn.morse.ui.theme.isDarkTheme
 
 @Composable
 fun LearnScreenRoute(lessonId: Long, resume: Boolean, onNextLesson: () -> Unit, onBack: () -> Unit){
     val context = LocalContext.current
     val initialChapter = remember(lessonId) { if (resume) LessonProgress.savedStep(context, lessonId) else 0 }
     val initialMistakes = remember(lessonId) { if (resume) LessonProgress.savedMistakes(context, lessonId) else 0 }
+    val lesson = remember(lessonId) { lessons.first { it.id == lessonId } }
+    val learns = remember(lessonId) { learnsFor(lessonId) }
+    NoAppOpenAds()
     LearnScreen(
-        lessonId = lessonId,
+        lesson = lesson,
+        learns = learns,
+        isLastLesson = lesson == courseOf(lessonId).lessons.last(),
         initialChapter = initialChapter,
         initialMistakes = initialMistakes,
         onChapterChange = { LessonProgress.saveStep(context, lessonId, it) },
         onMistakesChange = { LessonProgress.saveMistakes(context, lessonId, it) },
-        onLessonFinished = { stars -> LessonProgress.markCompleted(context, lessonId, stars) },
+        onAnswer = { step, correct ->
+            // Words and signals aren't single symbols, so only symbol lessons feed weak-letter practice.
+            if (lesson.kind == LessonKind.Symbols) SymbolStats.record(context, step.target, correct)
+        },
+        onLessonFinished = { stars ->
+            LessonProgress.markCompleted(context, lessonId, stars)
+            Streak.record(context)
+            Analytics.logLessonComplete(lessonId, stars)
+        },
         onNextLesson = onNextLesson,
         onBack = onBack
     )
 }
 
+/**
+ * A short session of the symbols missed most lately, built when it opens; saves no step, only which
+ * symbols are still weak and the streak.
+ */
+@Composable
+fun PracticeScreenRoute(onBack: () -> Unit) {
+    val context = LocalContext.current
+    val session = remember {
+        val learned = learnedSymbols(LessonProgress.completedCount(context))
+        practiceSession(learned, SymbolStats.weak(context, learned), Random.Default)
+    }
+    if (session == null) {
+        // Nothing learned yet; Home doesn't offer practice then, so just leave.
+        LaunchedEffect(Unit) { onBack() }
+        return
+    }
+    NoAppOpenAds()
+    LearnScreen(
+        lesson = session.first,
+        learns = session.second,
+        isLastLesson = true,
+        onAnswer = { step, correct -> SymbolStats.record(context, step.target, correct) },
+        onLessonFinished = { stars ->
+            Streak.record(context)
+            Analytics.logPracticeComplete(stars)
+        },
+        onBack = onBack
+    )
+}
+
+/** No app open ad while a lesson is on screen. */
+@Composable
+private fun NoAppOpenAds() {
+    DisposableEffect(Unit) {
+        AppOpenAds.enterLesson()
+        onDispose { AppOpenAds.leaveLesson() }
+    }
+}
+
 @Composable
 private fun LearnScreen(
-    lessonId: Long,
+    lesson: LessonModel,
+    learns: List<LearnModel>,
+    isLastLesson: Boolean,
     initialChapter: Int = 0,
     initialMistakes: Int = 0,
     onChapterChange: (Int) -> Unit = {},
     onMistakesChange: (Int) -> Unit = {},
+    // Every answer, right or wrong, with the step it answered.
+    onAnswer: (LearnModel, Boolean) -> Unit = { _, _ -> },
     onLessonFinished: (stars: Int) -> Unit = {},
     onNextLesson: () -> Unit = {},
     onBack: () -> Unit = {}
 ){
-
-    val lesson = remember(lessonId) { lessons.first { it.id == lessonId } }
-    val learns = remember(lessonId) { learnsFor(lessonId) }
 
     var chapter by remember { mutableIntStateOf(initialChapter.coerceIn(0, learns.lastIndex)) }
     // Remember the step so "Continue learning" can resume from it.
     val currentOnChapterChange by rememberUpdatedState(onChapterChange)
     LaunchedEffect(chapter) { currentOnChapterChange(chapter) }
     val context = LocalContext.current
-    val sound = remember { SoundSettings.load(context) }
+    val sound = remember {
+        SoundSettings.load(context).let { saved -> lesson.wpm?.let { saved.copy(wpm = it, farnsworthWpm = null) } ?: saved }
+    }
 
     val learn=learns[ chapter]
 
@@ -131,13 +214,22 @@ private fun LearnScreen(
     var playRequest by remember { mutableIntStateOf(0) }
     // Keyed on chapter, not learn: consecutive chapters can hold equal LearnModels, which wouldn't restart the effect.
     LaunchedEffect(chapter, playRequest, started) {
-        if (started && learn.isListen) MorsePlayer.play(learn.morse, sound.unitMs, sound.frequency.toDouble(), sound.volume)
+        if (started && learn.isListen) MorsePlayer.play(context, learn.morse, sound)
     }
 
     val scope = rememberCoroutineScope()
     // Sounds while the circle button is held.
     val keyTone = remember { KeyTone(sound.frequency.toDouble(), sound.volume) }
     DisposableEffect(keyTone) { onDispose { keyTone.close() } }
+    // The key sounds and buzzes only through the outputs the user turned on.
+    fun keyDown() {
+        if (sound.sound) keyTone.start()
+        if (sound.vibrate) Haptics.keyDown(context)
+    }
+    fun keyUp() {
+        keyTone.stop()
+        if (sound.vibrate) Haptics.keyUp(context)
+    }
     // Right/wrong chime played as the card flips to the result.
     val feedback = remember { FeedbackSounds(context, sound.volume) }
     DisposableEffect(feedback) { onDispose { feedback.release() } }
@@ -167,9 +259,11 @@ private fun LearnScreen(
     // Stars earned once the last step is answered; non-null shows the complete dialog.
     var finishedStars by rememberSaveable { mutableStateOf<Int?>(null) }
 
+    val currentOnAnswer by rememberUpdatedState(onAnswer)
     fun answer(correct: Boolean, revealDelayMs: Long = 0) {
         if (isAnswering) return
         isAnswering = true
+        currentOnAnswer(learn, correct)
         isCorrect = correct
         scope.launch {
             delay(revealDelayMs.milliseconds)
@@ -213,7 +307,7 @@ private fun LearnScreen(
             onPlayLetter = { letter ->
                 previewJob?.cancel()
                 previewJob = scope.launch {
-                    MorsePlayer.play(codeOf(letter), sound.unitMs, sound.frequency.toDouble(), sound.volume)
+                    MorsePlayer.play(context, codeOf(letter), sound)
                 }
             },
             onStart = {
@@ -228,7 +322,8 @@ private fun LearnScreen(
         LessonCompleteDialog(
             stars = stars,
             mistakes = mistakes,
-            isLastLesson = lesson == courseOf(lessonId).lessons.last(),
+            isLastLesson = isLastLesson,
+            isPractice = lesson.isPractice,
             onNext = onNextLesson,
             onBackToLessons = onBack
         )
@@ -238,24 +333,25 @@ private fun LearnScreen(
         AlertDialog(
             onDismissRequest = { dismissTips() },
             icon = { Icon(Icons.Filled.TouchApp, contentDescription = null) },
-            title = { Text("How to type Morse") },
+            title = { Text(stringResource(R.string.learn_tips_title)) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text(
-                        text = "Use the circle button at the bottom of the screen.",
+                        text = stringResource(R.string.learn_tips_body),
                         style = MaterialTheme.typography.bodyMedium
                     )
-                    TipRow(action = "Tap", detail = "A quick press", symbol = "•")
-                    TipRow(action = "Long press", detail = "Press and hold", symbol = "—")
+                    TipRow(action = stringResource(R.string.learn_tip_tap), detail = stringResource(R.string.learn_tip_tap_detail), symbol = "•")
+                    TipRow(action = stringResource(R.string.learn_tip_hold), detail = stringResource(R.string.learn_tip_hold_detail), symbol = "—")
                 }
             },
             confirmButton = {
-                Button(onClick = { dismissTips() }) { Text("Got it") }
+                Button(onClick = { dismissTips() }) { Text(stringResource(R.string.action_got_it)) }
             }
         )
     }
 
-    Scaffold(containerColor = MaterialTheme.colorScheme.background) { paddingValues ->
+    // Transparent, so the app's Morse pattern background shows behind the lesson too.
+    Scaffold(containerColor = Color.Transparent, contentColor = MaterialTheme.colorScheme.onBackground) { paddingValues ->
         Column(
             modifier = Modifier
                 .padding(paddingValues)
@@ -284,7 +380,7 @@ private fun LearnScreen(
                     rotation = flip.value,
                     isCorrect = isCorrect,
                     revealed = wrongCount >= REVEAL_AFTER_WRONG,
-                    lessonName = lesson.name
+                    lessonName = lesson.displayName()
                 )
             }
 
@@ -292,22 +388,26 @@ private fun LearnScreen(
                 FilledTonalButton(onClick = { playRequest++ }) {
                     Icon(Icons.AutoMirrored.Filled.VolumeUp, contentDescription = null)
                     Spacer(Modifier.width(8.dp))
-                    Text("Play again")
+                    Text(stringResource(R.string.learn_play_again))
                 }
                 Spacer(Modifier.height(16.dp))
+                // A meaning quiz answers with what each signal means instead of its name.
+                val meaningKeys = lesson.options.map { option -> signalOf(option)?.let { stringResource(it.meaning) }.orEmpty() }
+                val meaning = learn.meaning?.let { stringResource(it) }
+                val keys = learn.choices ?: if (learn.isMeaning) meaningKeys else lesson.options
                 AnswerGrid(
-                    // A meaning quiz answers with what each signal means instead of its name.
-                    keys = if (learn.isMeaning) lesson.options.map { signalOf(it)?.meaning.orEmpty() } else lesson.options,
+                    keys = keys,
                     // Quiz steps hide the morse so the letter is recognized by sound, not by counting symbols.
                     // Words and signals never show it: their codes don't fit in a tile, and the card shows it anyway.
                     showMorse = !learn.isHidden && lesson.kind == LessonKind.Symbols,
-                    isTextAnswer = learn.isMeaning,
+                    // Phrases need the wide, smaller-type tiles that meanings use.
+                    isTextAnswer = learn.isMeaning || keys.any { ' ' in it },
                     picked = picked,
                     isCorrect = isCorrect,
                     enabled = !isAnswering,
                     onPick = { key ->
                         picked = key
-                        answer(key == if (learn.isMeaning) learn.meaning else learn.target)
+                        answer(key == if (learn.isMeaning) meaning else learn.target)
                     }
                 )
                 Spacer(Modifier.height(24.dp))
@@ -406,14 +506,14 @@ private fun LearnScreen(
                                         val event = awaitPointerEvent()
                                         event.changes.forEach { change ->
                                             if (change.changedToDownIgnoreConsumed()) {
-                                                if (downAt.isEmpty()) keyTone.start()
+                                                if (downAt.isEmpty()) keyDown()
                                                 downAt[change.id] = change.uptimeMillis
                                                 pressStartMs = change.uptimeMillis
                                                 change.consume()
                                             } else if (change.changedToUpIgnoreConsumed()) {
                                                 // Up counts even if the finger slid off the key.
                                                 val start = downAt.remove(change.id) ?: return@forEach
-                                                if (downAt.isEmpty()) keyTone.stop()
+                                                if (downAt.isEmpty()) keyUp()
                                                 pressStartMs = downAt.values.maxOrNull()
                                                 val held = change.uptimeMillis - start
                                                 onSymbol(if (held >= DASH_THRESHOLD_MS) '-' else '.', start, change.uptimeMillis)
@@ -427,7 +527,7 @@ private fun LearnScreen(
                     ) {
                         Icon(
                             Icons.Filled.TouchApp,
-                            contentDescription = "Morse key",
+                            contentDescription = stringResource(R.string.learn_morse_key),
                             modifier = Modifier.size(40.dp),
                             tint = MaterialTheme.colorScheme.onPrimary
                         )
@@ -437,10 +537,10 @@ private fun LearnScreen(
                 Text(
                     modifier = Modifier.padding(top = 12.dp, bottom = 24.dp),
                     text = when {
-                        learn.hasLetterGaps -> "Tap •  Hold —  Pause between letters"
+                        learn.hasLetterGaps -> stringResource(R.string.learn_hint_word)
                         // A prosign like SOS is one character: a pause would split it.
-                        learn.target.length > 1 -> "Tap •  Hold —  No pauses: it's one signal"
-                        else -> "Tap for •   Hold for —"
+                        learn.target.length > 1 -> stringResource(R.string.learn_hint_prosign)
+                        else -> stringResource(R.string.learn_hint_letter)
                     },
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -457,6 +557,8 @@ private const val DASH_THRESHOLD_MS = 150L
 private const val LETTER_GAP_MS = 500L
 private const val INPUT_CLEAR_DELAY_MS = 3000L
 private const val REVEAL_AFTER_WRONG = 3
+// Longest code, in symbols and gaps, the letter card shows; five-letter words fit.
+private const val MAX_CARD_MORSE = 26
 
 /**
  * Sending speed for a letter or word in PARIS words per minute: a dot is 1 unit, a dash 3, the gaps
@@ -490,15 +592,16 @@ private fun FlyingWpm(wpm: Int, trigger: Int) {
             scaleX = scale
             scaleY = scale
         },
-        text = "$wpm WPM",
+        text = stringResource(R.string.wpm_value, wpm),
         style = MaterialTheme.typography.titleLarge,
         fontWeight = FontWeight.ExtraBold,
         color = MaterialTheme.colorScheme.tertiary
     )
 }
 
-private val CorrectColor = Color(0xFF2E7D32)
-private val WrongColor = Color(0xFFC62828)
+// Deep shades on light backgrounds, brighter ones on dark where the deep ones turn murky.
+private val CorrectColor: Color @Composable get() = if (isDarkTheme()) Color(0xFF66BB6A) else Color(0xFF2E7D32)
+private val WrongColor: Color @Composable get() = if (isDarkTheme()) Color(0xFFEF5350) else Color(0xFFC62828)
 
 /** Close button, a rounded progress bar and the step counter. */
 @Composable
@@ -511,7 +614,7 @@ private fun LessonTopBar(step: Int, stepCount: Int, onClose: () -> Unit) {
         verticalAlignment = Alignment.CenterVertically
     ) {
         IconButton(onClick = onClose) {
-            Icon(Icons.Filled.Close, contentDescription = "Close lesson")
+            Icon(Icons.Filled.Close, contentDescription = stringResource(R.string.learn_close))
         }
         LinearProgressIndicator(
             modifier = Modifier
@@ -534,17 +637,31 @@ private fun LessonTopBar(step: Int, stepCount: Int, onClose: () -> Unit) {
 /** What kind of step this is, and what the user should do. */
 @Composable
 private fun StepHeader(learn: LearnModel) {
-    val noun = when {
-        learn.meaning != null -> "signal"
-        learn.isWord -> "word"
-        else -> "letter"
+    // Whole sentences per kind of step, not a noun dropped into one, so each language words it its own way.
+    val isSignal = learn.meaning != null
+    fun pick(letter: Int, word: Int, signal: Int) = when {
+        isSignal -> signal
+        learn.isWord -> word
+        else -> letter
     }
     val (icon, label, instruction) = when {
-        learn.isMeaning -> Triple(Icons.Filled.Lightbulb, "Meaning", "What does this signal mean?")
-        learn.isListen && learn.isHidden -> Triple(Icons.Filled.Hearing, "Quiz", "Which $noun did you hear?")
-        learn.isListen -> Triple(Icons.AutoMirrored.Filled.VolumeUp, "New $noun", "Listen, then pick the $noun")
-        learn.isMorseHidden -> Triple(Icons.Filled.Psychology, "From memory", "Tap out this $noun")
-        else -> Triple(Icons.Filled.TouchApp, "Tap it", "Tap out the code shown")
+        learn.isMeaning -> Triple(Icons.Filled.Lightbulb, R.string.learn_label_meaning, R.string.learn_meaning_question)
+        learn.isListen && learn.isHidden -> Triple(
+            Icons.Filled.Hearing,
+            R.string.learn_label_quiz,
+            pick(R.string.learn_quiz_letter, R.string.learn_quiz_word, R.string.learn_quiz_signal),
+        )
+        learn.isListen -> Triple(
+            Icons.AutoMirrored.Filled.VolumeUp,
+            pick(R.string.learn_label_new_letter, R.string.learn_label_new_word, R.string.learn_label_new_signal),
+            pick(R.string.learn_listen_letter, R.string.learn_listen_word, R.string.learn_listen_signal),
+        )
+        learn.isMorseHidden -> Triple(
+            Icons.Filled.Psychology,
+            R.string.learn_label_memory,
+            pick(R.string.learn_tap_letter, R.string.learn_tap_word, R.string.learn_tap_signal),
+        )
+        else -> Triple(Icons.Filled.TouchApp, R.string.learn_label_tap, R.string.learn_tap_shown)
     }
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Row(
@@ -561,14 +678,14 @@ private fun StepHeader(learn: LearnModel) {
             )
             Spacer(Modifier.width(6.dp))
             Text(
-                text = label,
+                text = stringResource(label),
                 style = MaterialTheme.typography.labelLarge,
                 color = MaterialTheme.colorScheme.onSecondaryContainer
             )
         }
         Spacer(Modifier.height(8.dp))
         Text(
-            text = instruction,
+            text = stringResource(instruction),
             style = MaterialTheme.typography.titleLarge,
             fontWeight = FontWeight.SemiBold
         )
@@ -576,14 +693,17 @@ private fun StepHeader(learn: LearnModel) {
 }
 
 /**
- * The letter card. [rotation] 0 shows the letter (or 🎧 in a quiz), 180 shows the result.
- * Content switches at 90°, when the card is edge-on. [revealed] shows a quiz letter and its mores after repeated misses.
+ * The letter card. [rotation] 0 shows the letter (or headphones in a quiz) on a light card with a
+ * light running around its border; 180 shows the result. Content switches at 90°, when the card is
+ * edge-on. [revealed] shows a quiz letter and its morse after repeated misses.
  */
 @Composable
 private fun FlipCard(learn: LearnModel, rotation: Float, isCorrect: Boolean, revealed: Boolean, lessonName: String) {
     val showBack = rotation > 90f
     val hidden = learn.isHidden && !revealed
     val resultColor = if (isCorrect) CorrectColor else WrongColor
+    val colors = MaterialTheme.colorScheme
+    val accent = colors.primary
     Surface(
         modifier = Modifier
             .sizeIn(maxWidth = 280.dp, maxHeight = 280.dp)
@@ -592,11 +712,13 @@ private fun FlipCard(learn: LearnModel, rotation: Float, isCorrect: Boolean, rev
             .graphicsLayer {
                 rotationY = rotation
                 cameraDistance = 12f * density
-            },
-        shape = RoundedCornerShape(32.dp),
-        color = if (showBack) resultColor.copy(alpha = 0.12f) else MaterialTheme.colorScheme.surfaceContainerHigh,
+            }
+            .then(if (showBack) Modifier else Modifier.runningBorder(CardShapeRadius, accent)),
+        shape = RoundedCornerShape(CardShapeRadius),
+        // Opaque, so the background pattern doesn't show through.
+        color = (if (showBack) resultColor.copy(alpha = 0.12f) else accent.copy(alpha = 0.05f)).compositeOver(colors.surface),
         border = if (showBack) BorderStroke(2.dp, resultColor) else null,
-        shadowElevation = 4.dp
+        shadowElevation = 8.dp
     ) {
         Box(contentAlignment = Alignment.Center) {
             if (showBack) {
@@ -613,7 +735,7 @@ private fun FlipCard(learn: LearnModel, rotation: Float, isCorrect: Boolean, rev
                     )
                     Spacer(Modifier.height(8.dp))
                     Text(
-                        text = if (isCorrect) "Correct!" else "Try again",
+                        text = stringResource(if (isCorrect) R.string.learn_correct else R.string.learn_try_again),
                         style = MaterialTheme.typography.headlineSmall,
                         fontWeight = FontWeight.Bold,
                         color = resultColor
@@ -621,16 +743,34 @@ private fun FlipCard(learn: LearnModel, rotation: Float, isCorrect: Boolean, rev
                 }
             } else {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(
+                    if (hidden) {
                         // An icon, not "?", which is itself a symbol taught in Punctuation.
-                        text = if (hidden) "🎧" else learn.target,
-                        // Emoji draw larger than letters at the same size.
-                        fontSize = if (hidden) 72.sp else 96.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = if (hidden) MaterialTheme.colorScheme.onSurfaceVariant
-                        else MaterialTheme.colorScheme.onSurface
-                    )
-                    if (!hidden && !learn.isMorseHidden) {
+                        Box(
+                            modifier = Modifier
+                                .size(112.dp)
+                                .background(accent.copy(alpha = 0.12f), CircleShape),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(Icons.Filled.Headphones, contentDescription = null, tint = accent, modifier = Modifier.size(60.dp))
+                        }
+                    } else {
+                        Text(
+                            modifier = Modifier.padding(horizontal = 16.dp),
+                            text = learn.target,
+                            // Longer words and phrases get smaller type so they fit the card.
+                            fontSize = when {
+                                learn.target.length <= 2 -> 96.sp
+                                learn.target.length <= 5 -> 60.sp
+                                else -> 36.sp
+                            },
+                            textAlign = TextAlign.Center,
+                            lineHeight = 40.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = colors.onSurface
+                        )
+                    }
+                    // A phrase's code is too long for one line on the card; it's heard instead.
+                    if (!hidden && !learn.isMorseHidden && learn.morse.length <= MAX_CARD_MORSE) {
                         Spacer(Modifier.height(12.dp))
                         // Smaller dots for long codes (words, $) so they fit the card.
                         MorseSymbols(learn.morse, dotSize = if (learn.morse.length > 5) 10.dp else 16.dp)
@@ -638,19 +778,22 @@ private fun FlipCard(learn: LearnModel, rotation: Float, isCorrect: Boolean, rev
                     if (!hidden && learn.meaning != null) {
                         Spacer(Modifier.height(12.dp))
                         Text(
-                            text = learn.meaning,
+                            text = stringResource(learn.meaning),
                             style = MaterialTheme.typography.titleMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = colors.onSurfaceVariant
                         )
                     }
                 }
                 Text(
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
-                        .padding(bottom = 16.dp),
+                        .padding(bottom = 16.dp)
+                        .background(accent.copy(alpha = 0.12f), CircleShape)
+                        .padding(horizontal = 12.dp, vertical = 4.dp),
                     text = lessonName,
                     style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    fontWeight = FontWeight.SemiBold,
+                    color = accent
                 )
             }
         }
@@ -745,6 +888,46 @@ private fun AnswerTile(
     }
 }
 
+private val CardShapeRadius = 32.dp
+private val RunningBorderWidth = 3.dp
+
+/**
+ * A border with a light running around it: a sweep of [accent] and amber, turning once every
+ * few seconds, over a faint full outline so the card's edge always shows.
+ */
+@Composable
+private fun Modifier.runningBorder(radius: Dp, accent: Color): Modifier {
+    val angle by rememberInfiniteTransition(label = "border").animateFloat(
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = infiniteRepeatable(tween(3000, easing = LinearEasing)),
+        label = "borderAngle",
+    )
+    val sweep = Brush.sweepGradient(
+        listOf(Color.Transparent, accent.copy(alpha = 0.5f), accent, StarColor, Color.Transparent)
+    )
+    return drawWithCache {
+        val width = RunningBorderWidth.toPx()
+        val corner = CornerRadius(radius.toPx())
+        // The ring between the card's edge and the inside of the border.
+        val ring = Path().apply {
+            op(
+                Path().apply { addRoundRect(RoundRect(size.toRect(), corner)) },
+                Path().apply { addRoundRect(RoundRect(size.toRect().deflate(width), CornerRadius(radius.toPx() - width))) },
+                PathOperation.Difference,
+            )
+        }
+        val reach = hypot(size.width, size.height)
+        onDrawWithContent {
+            drawContent()
+            clipPath(ring) {
+                drawPath(ring, accent.copy(alpha = 0.18f))
+                rotate(angle) { drawCircle(sweep, radius = reach) }
+            }
+        }
+    }
+}
+
 /** The mores typed so far, with the press in progress shown faded. Keeps its height when empty. */
 @Composable
 private fun TypedMorse(input: String, pending: Char?) {
@@ -752,13 +935,15 @@ private fun TypedMorse(input: String, pending: Char?) {
         modifier = Modifier
             .fillMaxWidth()
             .height(56.dp)
-            .background(MaterialTheme.colorScheme.surfaceContainer, RoundedCornerShape(16.dp)),
+            // A light wash of the theme color with an outline, so it reads as an input over the pattern.
+            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.08f).compositeOver(MaterialTheme.colorScheme.surface), RoundedCornerShape(16.dp))
+            .border(1.5.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.3f), RoundedCornerShape(16.dp)),
         horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
         verticalAlignment = Alignment.CenterVertically
     ) {
         if (input.isEmpty() && pending == null) {
             Text(
-                text = "Your code appears here",
+                text = stringResource(R.string.learn_code_placeholder),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -814,17 +999,19 @@ private fun TipRow(action: String, detail: String, symbol: String) {
 @Preview
 @Composable
 private fun LearnScreenPreview(){
-    LearnScreen(lessonId = 1)
+    LearnScreen(lesson = lessons.first(), learns = learnsFor(lessons.first().id), isLastLesson = false)
 }
 
 
 data class LessonModel(
     val id:Long,
-    val name: String,
+    val title: LessonTitle,
     // The symbols taught, which are also the answer tiles. A list, since "," is itself a symbol.
     val options: List<String>,
     val chapter:Int,
     val kind: LessonKind = LessonKind.Symbols,
+    // Speed drills play at this speed, whatever the user's setting, and without Farnsworth gaps.
+    val wpm: Int? = null,
 )
 
 enum class LessonKind {
@@ -847,9 +1034,11 @@ data class  LearnModel(
     val isHidden: Boolean = false,
     val isMorseHidden: Boolean= false,
     // What a signal means; null outside signal lessons.
-    val meaning: String? = null,
+    @StringRes val meaning: Int? = null,
     // Meaning quiz: the signal is heard and the user picks its meaning instead of its name.
     val isMeaning: Boolean = false,
+    // The answer tiles for this step, when it offers a few of the lesson's items rather than all of them.
+    val choices: List<String>? = null,
 ) {
     // A step in a word lesson: the target is a whole word, typed with letter gaps.
     val isWord: Boolean get() = target.length > 1 && meaning == null
@@ -872,5 +1061,11 @@ val morseMap=hashMapOf(
     "\"" to ".-..-.", "$" to "...-..-", "@" to ".--.-.",
 )
 
-/** Morse for a symbol or a word, with a space between the letters of a word: "IT" is ".. -". */
-fun morseOf(text: String): String = text.map { morseMap.getValue(it.toString()) }.joinToString(" ")
+/**
+ * Morse for a symbol, word or phrase: a space between the letters of a word ("IT" is ".. -") and
+ * " / " between words ("SO IT" is "... --- / .. -").
+ */
+fun morseOf(text: String): String =
+    text.split(' ').filter { it.isNotEmpty() }.joinToString(" / ") { word ->
+        word.map { morseMap.getValue(it.toString()) }.joinToString(" ")
+    }

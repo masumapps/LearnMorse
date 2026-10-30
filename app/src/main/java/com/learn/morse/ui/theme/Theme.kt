@@ -9,6 +9,8 @@ import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.platform.LocalContext
 
 private val DarkColorScheme = darkColorScheme(
@@ -35,7 +37,7 @@ private val LightColorScheme = lightColorScheme(
 
 @Composable
 fun LearnMorseTheme(
-    darkTheme: Boolean = isSystemInDarkTheme(),
+    darkTheme: Boolean = isDarkTheme(),
     // Dynamic color is available on Android 12+
     dynamicColor: Boolean = true,
     content: @Composable () -> Unit
@@ -55,4 +57,14 @@ fun LearnMorseTheme(
         typography = Typography,
         content = content
     )
+}
+/** Whether the app is dark: the theme picked in settings, or the phone's when it follows the system. */
+@Composable
+fun isDarkTheme(): Boolean {
+    val mode by AppTheme.mode.collectAsState()
+    return when (mode) {
+        ThemeMode.SYSTEM -> isSystemInDarkTheme()
+        ThemeMode.LIGHT -> false
+        ThemeMode.DARK -> true
+    }
 }

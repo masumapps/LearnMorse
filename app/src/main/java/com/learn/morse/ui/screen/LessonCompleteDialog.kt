@@ -18,19 +18,26 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.pluralStringResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import com.learn.morse.R
 
-/** Shown when a lesson is finished: the stars earned and where to go next. [isLastLesson] hides "Next lesson". */
+/**
+ * Shown when a lesson is finished: the stars earned and where to go next. [isLastLesson] hides
+ * "Next lesson"; [isPractice] also drops the hint about replaying for stars, which practice doesn't keep.
+ */
 @Composable
 fun LessonCompleteDialog(
     stars: Int,
     mistakes: Int,
     isLastLesson: Boolean,
+    isPractice: Boolean = false,
     onNext: () -> Unit,
     onBackToLessons: () -> Unit,
 ) {
@@ -51,27 +58,24 @@ fun LessonCompleteDialog(
                 Spacer(Modifier.height(16.dp))
                 Text(
                     text = when (stars) {
-                        3 -> "Excellent!"
-                        2 -> "Great job!"
-                        else -> "Lesson complete"
+                        3 -> stringResource(R.string.complete_excellent)
+                        2 -> stringResource(R.string.complete_great)
+                        else -> stringResource(if (isPractice) R.string.complete_practice else R.string.complete_lesson)
                     },
                     style = MaterialTheme.typography.headlineSmall,
                     fontWeight = FontWeight.Bold,
                 )
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    text = when (mistakes) {
-                        0 -> "No mistakes. Perfect!"
-                        1 -> "1 mistake"
-                        else -> "$mistakes mistakes"
-                    },
+                    text = if (mistakes == 0) stringResource(R.string.complete_perfect)
+                    else pluralStringResource(R.plurals.mistakes_count, mistakes, mistakes),
                     style = MaterialTheme.typography.bodyLarge,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center,
                 )
-                if (stars < 3) {
+                if (stars < 3 && !isPractice) {
                     Text(
-                        text = "Replay it any time to earn more stars.",
+                        text = stringResource(R.string.complete_replay_hint),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         textAlign = TextAlign.Center,
@@ -80,15 +84,15 @@ fun LessonCompleteDialog(
                 Spacer(Modifier.height(24.dp))
                 if (isLastLesson) {
                     Button(modifier = Modifier.fillMaxWidth().height(52.dp), onClick = onBackToLessons) {
-                        Text("Done", style = MaterialTheme.typography.titleMedium)
+                        Text(stringResource(R.string.action_done), style = MaterialTheme.typography.titleMedium)
                     }
                 } else {
                     Button(modifier = Modifier.fillMaxWidth().height(52.dp), onClick = onNext) {
-                        Text("Next lesson", style = MaterialTheme.typography.titleMedium)
+                        Text(stringResource(R.string.complete_next), style = MaterialTheme.typography.titleMedium)
                         Spacer(Modifier.width(8.dp))
                         Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null)
                     }
-                    TextButton(onClick = onBackToLessons) { Text("Back to lessons") }
+                    TextButton(onClick = onBackToLessons) { Text(stringResource(R.string.complete_back)) }
                 }
             }
         }

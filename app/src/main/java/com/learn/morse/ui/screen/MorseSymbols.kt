@@ -18,7 +18,7 @@ import androidx.compose.ui.unit.dp
 
 /**
  * Draws morse as shapes: round dots and pill-shaped dashes, a dash being 2.5 dots long.
- * A space (between the letters of a word) leaves a wider gap.
+ * A space (between the letters of a word) leaves a wider gap, and a / (between words) a wider one still.
  */
 @Composable
 fun MorseSymbols(
@@ -33,8 +33,8 @@ fun MorseSymbols(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         morse.forEach { symbol ->
-            if (symbol == ' ') {
-                Spacer(Modifier.width(dotSize))
+            if (symbol == ' ' || symbol == '/') {
+                Spacer(Modifier.width(if (symbol == '/') dotSize * 2 else dotSize))
                 return@forEach
             }
             Box(

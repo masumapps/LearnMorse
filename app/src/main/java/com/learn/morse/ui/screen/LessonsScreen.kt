@@ -18,34 +18,48 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.EmojiEvents
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Replay
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.pluralStringResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import com.learn.morse.R
+import com.learn.morse.monetization.Ads
+import com.learn.morse.monetization.Entitlements
 import com.learn.morse.progress.LessonProgress
+import kotlinx.coroutines.launch
 
 @Composable
 fun LessonsScreen(courseId: Int, onLessonClick: (id: Long, resume: Boolean) -> Unit, onBack: () -> Unit) {
@@ -57,16 +71,22 @@ fun LessonsScreen(courseId: Int, onLessonClick: (id: Long, resume: Boolean) -> U
         course.lessons.getOrNull(completedCount)?.let { LessonProgress.savedStep(context, it.id) } ?: 0
     }
     val stars = remember { course.lessons.associate { it.id to LessonProgress.stars(context, it.id) } }
-    LessonsContent(course, completedCount, currentStep, stars, onLessonClick, onBack)
+    // Collected so the lock goes away as soon as the lesson is unlocked.
+    val isPremium by Entitlements.isPremium.collectAsState()
+    val unlockedLessons by Entitlements.unlockedLessons.collectAsState()
+    val currentLocked = remember(isPremium, unlockedLessons) {
+        course.lessons.getOrNull(completedCount)?.let { !Entitlements.canOpen(context, it.id) } ?: false
+    }
+    LessonsContent(course, completedCount, currentStep, stars, currentLocked, onLessonClick, onBack)
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun LessonsContent(
     course: Course,
     completedCount: Int,
     currentStep: Int,
     stars: Map<Long, Int>,
+    currentLocked: Boolean,
     onLessonClick: (id: Long, resume: Boolean) -> Unit,
     onBack: () -> Unit,
 ) {
@@ -74,19 +94,54 @@ private fun LessonsContent(
     val completed = lessons.take(completedCount)
     val current = lessons.getOrNull(completedCount)
     val locked = lessons.drop(completedCount + 1)
+    var showMap by rememberSaveable { mutableStateOf(true) }
+    val snackbarHostState = remember { SnackbarHostState() }
+    val lockedMessage = current?.let { stringResource(R.string.lessons_finish_to_unlock, lessonNumber(it)) }
+    val scope = rememberCoroutineScope()
 
     Scaffold(
+        // Shows the app's Morse pattern background, drawn in MainActivity.
+        containerColor = Color.Transparent,
+        contentColor = MaterialTheme.colorScheme.onBackground,
         topBar = {
-            TopAppBar(
-                title = { Text(course.name) },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+            ProgressTopBar(
+                title = stringResource(course.name),
+                subtitle = stringResource(course.description),
+                lessonsDone = completedCount,
+                lessonCount = lessons.size,
+                starCount = stars.values.sum(),
+                onBack = onBack,
+                badge = course.badge,
+                actions = {
+                    IconButton(onClick = { showMap = !showMap }) {
+                        if (showMap) Icon(Icons.AutoMirrored.Filled.List, contentDescription = stringResource(R.string.lessons_show_list))
+                        else Icon(Icons.Filled.Map, contentDescription = stringResource(R.string.lessons_show_map))
                     }
-                }
+                },
             )
-        }
+        },
+        snackbarHost = { SnackbarHost(snackbarHostState) },
+        bottomBar = { Ads.Banner() },
     ) { paddingValues ->
+        if (showMap) {
+            LessonMap(
+                course = course,
+                completedCount = completedCount,
+                currentStep = currentStep,
+                stars = stars,
+                onLessonClick = onLessonClick,
+                onLockedClick = {
+                    val message = lockedMessage ?: return@LessonMap
+                    scope.launch {
+                        snackbarHostState.currentSnackbarData?.dismiss()
+                        snackbarHostState.showSnackbar(message)
+                    }
+                },
+                modifier = Modifier.padding(paddingValues),
+                currentLocked = currentLocked,
+            )
+            return@Scaffold
+        }
         LazyColumn(
             modifier = Modifier.padding(paddingValues),
             contentPadding = PaddingValues(16.dp),
@@ -99,15 +154,16 @@ private fun LessonsContent(
                         lessonCount = lessons.size,
                         completedCount = completedCount,
                         currentStep = currentStep,
+                        isLocked = currentLocked,
                         onClick = { onLessonClick(current.id, true) },
                     )
                 } else {
-                    AllCompleteCard(courseName = course.name, onReview = { onLessonClick(lessons.first().id, false) })
+                    AllCompleteCard(courseName = stringResource(course.name), onReview = { onLessonClick(lessons.first().id, false) })
                 }
             }
 
             if (completed.isNotEmpty()) {
-                item { SectionHeader("Completed", completed.size) }
+                item { SectionHeader(stringResource(R.string.lessons_completed), completed.size) }
                 items(completed, key = { it.id }) { lesson ->
                     LessonRow(
                         lesson = lesson,
@@ -121,7 +177,7 @@ private fun LessonsContent(
             }
 
             if (locked.isNotEmpty()) {
-                item { SectionHeader("Locked", locked.size) }
+                item { SectionHeader(stringResource(R.string.lessons_locked), locked.size) }
                 items(locked, key = { it.id }) { lesson ->
                     LessonRow(
                         lesson = lesson,
@@ -136,7 +192,14 @@ private fun LessonsContent(
 }
 
 @Composable
-private fun CurrentLessonCard(lesson: LessonModel, lessonCount: Int, completedCount: Int, currentStep: Int, onClick: () -> Unit) {
+private fun CurrentLessonCard(
+    lesson: LessonModel,
+    lessonCount: Int,
+    completedCount: Int,
+    currentStep: Int,
+    isLocked: Boolean,
+    onClick: () -> Unit,
+) {
     val stepCount = remember(lesson.id) { learnsFor(lesson.id).size }
     val isStarted = completedCount > 0 || currentStep > 0
     Card(
@@ -149,12 +212,13 @@ private fun CurrentLessonCard(lesson: LessonModel, lessonCount: Int, completedCo
     ) {
         Column(modifier = Modifier.padding(20.dp)) {
             Text(
-                text = if (isStarted) "Up next · Lesson ${lessonNumber(lesson)}" else "Lesson ${lessonNumber(lesson)}",
+                text = if (isStarted) stringResource(R.string.lessons_up_next, lessonNumber(lesson))
+                else stringResource(R.string.lesson_number, lessonNumber(lesson)),
                 style = MaterialTheme.typography.labelLarge,
             )
             Spacer(Modifier.height(4.dp))
             Text(
-                text = lesson.name,
+                text = lesson.displayName(),
                 style = MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.Bold,
             )
@@ -167,11 +231,12 @@ private fun CurrentLessonCard(lesson: LessonModel, lessonCount: Int, completedCo
             )
             Spacer(Modifier.height(4.dp))
             Text(
-                text = if (currentStep > 0) "Step ${currentStep + 1} of $stepCount" else "$stepCount steps",
+                text = if (currentStep > 0) stringResource(R.string.step_of, currentStep + 1, stepCount)
+                else pluralStringResource(R.plurals.steps_count, stepCount, stepCount),
                 style = MaterialTheme.typography.bodySmall,
             )
             Text(
-                text = "$completedCount of $lessonCount lessons completed",
+                text = pluralStringResource(R.plurals.lessons_of_completed, lessonCount, completedCount, lessonCount),
                 style = MaterialTheme.typography.bodySmall,
             )
             Spacer(Modifier.height(16.dp))
@@ -181,10 +246,14 @@ private fun CurrentLessonCard(lesson: LessonModel, lessonCount: Int, completedCo
                     .height(52.dp),
                 onClick = onClick,
             ) {
-                Icon(Icons.Filled.PlayArrow, contentDescription = null)
+                Icon(if (isLocked) Icons.Filled.Lock else Icons.Filled.PlayArrow, contentDescription = null)
                 Spacer(Modifier.width(8.dp))
                 Text(
-                    text = if (isStarted) "Continue learning" else "Start learning",
+                    text = when {
+                        isLocked -> stringResource(R.string.lessons_unlock)
+                        isStarted -> stringResource(R.string.lessons_continue)
+                        else -> stringResource(R.string.lessons_start)
+                    },
                     style = MaterialTheme.typography.titleMedium,
                 )
             }
@@ -211,19 +280,19 @@ private fun AllCompleteCard(courseName: String, onReview: () -> Unit) {
             Icon(Icons.Filled.EmojiEvents, contentDescription = null, modifier = Modifier.size(48.dp))
             Spacer(Modifier.height(8.dp))
             Text(
-                text = "$courseName completed",
+                text = stringResource(R.string.lessons_course_completed, courseName),
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.Bold,
             )
             Text(
-                text = "Replay any lesson below to keep practising.",
+                text = stringResource(R.string.lessons_replay_hint),
                 style = MaterialTheme.typography.bodyMedium,
             )
             Spacer(Modifier.height(16.dp))
             Button(modifier = Modifier.fillMaxWidth(), onClick = onReview) {
                 Icon(Icons.Filled.Replay, contentDescription = null)
                 Spacer(Modifier.width(8.dp))
-                Text("Start again")
+                Text(stringResource(R.string.lessons_start_again))
             }
         }
     }
@@ -271,7 +340,7 @@ private fun LetterChips(lesson: LessonModel) {
 private fun SectionHeader(title: String, count: Int) {
     Text(
         modifier = Modifier.padding(top = 16.dp, bottom = 4.dp),
-        text = "$title ($count)",
+        text = stringResource(R.string.section_count, title, count),
         style = MaterialTheme.typography.titleMedium,
         color = MaterialTheme.colorScheme.primary,
     )
@@ -305,16 +374,16 @@ private fun LessonRow(
             Spacer(Modifier.width(16.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = "Lesson ${lessonNumber(lesson)}",
+                    text = stringResource(R.string.lesson_number, lessonNumber(lesson)),
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                Text(text = lesson.name, style = MaterialTheme.typography.titleMedium)
+                Text(text = lesson.displayName(), style = MaterialTheme.typography.titleMedium)
                 // Lessons finished before stars existed have none recorded, so show nothing rather than zero.
                 if (stars > 0) StarRating(stars, modifier = Modifier.padding(top = 4.dp), size = 16.dp)
             }
             if (trailing != null) {
-                Icon(trailing, contentDescription = "Replay", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                Icon(trailing, contentDescription = stringResource(R.string.replay), tint = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
     }
@@ -330,5 +399,5 @@ private fun LessonRow(
 @Preview(showBackground = true)
 @Composable
 private fun LessonsScreenPreview() {
-    LessonsContent(course = courses.first(), completedCount = 2, currentStep = 5, stars = mapOf(1L to 3, 2L to 2), onLessonClick = { _, _ -> }, onBack = {})
+    LessonsContent(course = courses.first(), completedCount = 2, currentStep = 5, stars = mapOf(1L to 3, 2L to 2), currentLocked = false, onLessonClick = { _, _ -> }, onBack = {})
 }

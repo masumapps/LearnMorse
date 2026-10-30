@@ -1,5 +1,6 @@
 package com.learn.morse.ui.screen
 
+import android.content.Intent
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -17,6 +18,7 @@ import androidx.compose.material.icons.automirrored.filled.Backspace
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material3.Card
@@ -43,16 +45,19 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import com.learn.morse.R
 import com.learn.morse.audio.MorsePlayer
-import com.learn.morse.audio.SoundSettings
+import com.learn.morse.monetization.Ads
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
@@ -79,16 +84,20 @@ fun TranslatorScreen(onBack: () -> Unit) {
     }
 
     Scaffold(
+        // Shows the app's Morse pattern background, drawn in MainActivity.
+        containerColor = Color.Transparent,
+        contentColor = MaterialTheme.colorScheme.onBackground,
         topBar = {
             TopAppBar(
-                title = { Text("Morse ⇄ Text") },
+                title = { Text(stringResource(R.string.translator_title)) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.back))
                     }
                 }
             )
-        }
+        },
+        bottomBar = { Ads.Banner() },
     ) { paddingValues ->
         Column(
             modifier = Modifier
@@ -103,12 +112,12 @@ fun TranslatorScreen(onBack: () -> Unit) {
                     selected = toMorse,
                     onClick = { setMode(true) },
                     shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
-                ) { Text("Text → Morse") }
+                ) { Text(stringResource(R.string.translator_to_morse)) }
                 SegmentedButton(
                     selected = !toMorse,
                     onClick = { setMode(false) },
                     shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
-                ) { Text("Morse → Text") }
+                ) { Text(stringResource(R.string.translator_to_text)) }
             }
 
             OutlinedTextField(
@@ -117,12 +126,12 @@ fun TranslatorScreen(onBack: () -> Unit) {
                 modifier = Modifier
                     .fillMaxWidth()
                     .heightIn(min = 120.dp),
-                label = { Text(if (toMorse) "Text" else "Morse") },
+                label = { Text(stringResource(if (toMorse) R.string.translator_text else R.string.translator_morse)) },
                 placeholder = {
-                    Text(if (toMorse) "Type a message" else "... --- ... / .... ..")
+                    Text(if (toMorse) stringResource(R.string.translator_placeholder) else "... --- ... / .... ..")
                 },
                 supportingText = {
-                    if (!toMorse) Text("Space between letters, / between words")
+                    if (!toMorse) Text(stringResource(R.string.translator_morse_hint))
                 },
                 textStyle = if (toMorse) MaterialTheme.typography.bodyLarge
                 else MaterialTheme.typography.bodyLarge.copy(fontFamily = FontFamily.Monospace),
@@ -134,7 +143,7 @@ fun TranslatorScreen(onBack: () -> Unit) {
                 trailingIcon = {
                     if (input.isNotEmpty()) {
                         IconButton(onClick = { input = "" }) {
-                            Icon(Icons.Filled.Clear, contentDescription = "Clear")
+                            Icon(Icons.Filled.Clear, contentDescription = stringResource(R.string.clear))
                         }
                     }
                 },
@@ -149,27 +158,37 @@ fun TranslatorScreen(onBack: () -> Unit) {
 
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    text = if (toMorse) "Morse" else "Text",
+                    text = stringResource(if (toMorse) R.string.translator_morse else R.string.translator_text),
                     style = MaterialTheme.typography.titleMedium,
                     color = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.weight(1f),
                 )
                 IconButton(onClick = { setMode(!toMorse) }) {
-                    Icon(Icons.Filled.SwapVert, contentDescription = "Swap direction")
+                    Icon(Icons.Filled.SwapVert, contentDescription = stringResource(R.string.translator_swap))
                 }
                 IconButton(
                     onClick = { clipboard.setText(AnnotatedString(output)) },
                     enabled = output.isNotEmpty(),
                 ) {
-                    Icon(Icons.Filled.ContentCopy, contentDescription = "Copy")
+                    Icon(Icons.Filled.ContentCopy, contentDescription = stringResource(R.string.copy))
+                }
+                IconButton(
+                    onClick = {
+                        val send = Intent(Intent.ACTION_SEND)
+                            .setType("text/plain")
+                            .putExtra(Intent.EXTRA_TEXT, output)
+                        context.startActivity(Intent.createChooser(send, null))
+                    },
+                    enabled = output.isNotEmpty(),
+                ) {
+                    Icon(Icons.Filled.Share, contentDescription = stringResource(R.string.share))
                 }
                 IconButton(
                     onClick = {
                         playJob?.cancel()
                         if (!isPlaying) {
-                            val sound = SoundSettings.load(context)
                             playJob = scope.launch {
-                                MorsePlayer.play(morse, sound.unitMs, sound.frequency.toDouble(), sound.volume)
+                                MorsePlayer.play(context, morse)
                             }.also { job -> job.invokeOnCompletion { if (playJob == job) playJob = null } }
                         } else {
                             playJob = null
@@ -179,7 +198,7 @@ fun TranslatorScreen(onBack: () -> Unit) {
                 ) {
                     Icon(
                         if (isPlaying) Icons.Filled.Stop else Icons.Filled.PlayArrow,
-                        contentDescription = if (isPlaying) "Stop" else "Play morse",
+                        contentDescription = stringResource(if (isPlaying) R.string.stop else R.string.translator_play),
                     )
                 }
             }
@@ -192,7 +211,7 @@ fun TranslatorScreen(onBack: () -> Unit) {
             ) {
                 SelectionContainer(modifier = Modifier.padding(16.dp)) {
                     Text(
-                        text = output.ifEmpty { "Translation appears here" },
+                        text = output.ifEmpty { stringResource(R.string.translator_empty) },
                         style = if (toMorse) MaterialTheme.typography.titleLarge.copy(fontFamily = FontFamily.Monospace)
                         else MaterialTheme.typography.titleLarge,
                         color = if (output.isEmpty()) MaterialTheme.colorScheme.onSurfaceVariant
@@ -217,7 +236,7 @@ private fun MorseKeypad(onKey: (String) -> Unit, onBackspace: () -> Unit) {
             }
         }
         FilledTonalButton(onClick = onBackspace, modifier = Modifier.weight(1f)) {
-            Icon(Icons.AutoMirrored.Filled.Backspace, contentDescription = "Backspace")
+            Icon(Icons.AutoMirrored.Filled.Backspace, contentDescription = stringResource(R.string.backspace))
         }
     }
 }
